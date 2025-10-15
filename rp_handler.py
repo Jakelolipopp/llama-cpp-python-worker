@@ -51,7 +51,7 @@ def handler(event):
     # Replace the sleep code with your Python function to generate images, text, or run any machine learning workload
     time.sleep(seconds)  
     
-    return prompt + 
+    return prompt
 
 if __name__ == '__main__':
     runpod.serverless.start({'handler': handler })
