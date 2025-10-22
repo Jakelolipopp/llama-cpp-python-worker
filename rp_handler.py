@@ -2,6 +2,7 @@ import runpod
 import time  
 import os
 from llama_cpp import Llama
+import re
 
 
 volume_path = '/runpod-volume'
@@ -29,10 +30,94 @@ if found_gguf:
     print(f"Found gguf model at {gguf_path}, loading...")
     llm = Llama(
         model_path=gguf_path,
-        n_ctx=16384,      # The context size for the model.
+        n_ctx=16384*4,      # The context size for the model.
         n_gpu_layers=-1, # Offload all layers to the GPU. Set to 0 for CPU-only.
-        verbose=True,    # Enable verbose logging from llama.cpp.
+        verbose=False,    # Enable verbose logging from llama.cpp.
     )
+
+
+
+
+# small helper function for removing special token stuff
+def clean_stream(stream):
+    buffer = ""
+    current_channel = None
+    analysis_open = False
+
+    for chunk in stream:
+        content = chunk["choices"][0].get("delta", {}).get("content")
+        if content is None:
+            continue
+        buffer += content
+
+        while True:
+            if current_channel is None:
+                # Look for a full opener: <|channel|>NAME<|message|>
+                m = re.search(r"<\|channel\|>([^<]*)<\|message\|>", buffer)
+                if not m:
+                    # No complete opener yet — keep buffer (it may contain partial opener).
+                    # Don't emit anything before we know the channel.
+                    # If buffer grows huge, trim keeping a little tail to preserve split markers.
+                    if len(buffer) > 4096:
+                        buffer = buffer[-4096:]
+                    break
+
+                # Discard any garbage before the opener
+                if m.start() > 0:
+                    buffer = buffer[m.start():]
+                    m = re.search(r"<\|channel\|>([^<]*)<\|message\|>", buffer)
+                    if not m:
+                        break
+
+                current_channel = m.group(1).strip()
+                buffer = buffer[m.end():]  # remove the opener from buffer
+
+                if current_channel == "analysis":
+                    # Immediately emit opening tag for analysis
+                    yield "<t>"
+                    analysis_open = True
+
+                # Continue to process body (don't break)
+            else:
+                # We have an active channel; stream content up to next marker if any.
+                next_marker = buffer.find("<|")
+                if next_marker == -1:
+                    # No marker seen in buffer. Emit everything except a single trailing '<' (to handle split marker).
+                    if buffer:
+                        tail = ""
+                        if buffer.endswith("<"):
+                            tail = "<"
+                            to_emit = buffer[:-1]
+                        else:
+                            to_emit = buffer
+                        if to_emit:
+                            yield to_emit
+                        buffer = tail
+                    break
+
+                # Found a marker start: emit content up to marker, then prepare to parse the marker
+                message = buffer[:next_marker]
+                if message:
+                    yield message
+                buffer = buffer[next_marker:]  # keep the marker start for next loop
+
+                # Close analysis wrapper if needed before parsing next opener
+                if analysis_open:
+                    yield "</t>"
+                    analysis_open = False
+
+                current_channel = None
+                # loop continues to parse the marker
+
+    # Stream ended: flush remaining content
+    if current_channel is not None and buffer:
+        # If there's a remaining body for the active channel, emit it
+        yield buffer
+        buffer = ""
+
+    # If analysis tag is still open, close it
+    if analysis_open:
+        yield "</t>"
 
 def handler(event):
     global found_nas, found_gguf, llm
@@ -46,7 +131,6 @@ def handler(event):
     input = event['input']
 
     prompt = input.get('prompt')  
-    seconds = input.get('seconds', 0)  
 
     print(f"Received prompt: {prompt}")
     messages = [
@@ -60,16 +144,9 @@ def handler(event):
         messages=messages,
         stream=True
     )
-    for chunk in stream:
-        content = chunk["choices"][0].get("delta", {}).get("content")
-        if content is not None:
-            yield content
+    for token in clean_stream(stream):
+        yield token
 
-    print(f"Sleeping for {seconds} seconds...")
-    
-    # Replace the sleep code with your Python function to generate images, text, or run any machine learning workload
-    time.sleep(seconds)  
-    
     return
 
 if __name__ == '__main__':
