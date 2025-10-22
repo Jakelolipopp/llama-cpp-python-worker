@@ -30,7 +30,7 @@ if found_gguf:
     print(f"Found gguf model at {gguf_path}, loading...")
     llm = Llama(
         model_path=gguf_path,
-        n_ctx=16384*4,      # The context size for the model.
+        n_ctx=16384,      # The context size for the model.
         n_gpu_layers=-1, # Offload all layers to the GPU. Set to 0 for CPU-only.
         verbose=False,    # Enable verbose logging from llama.cpp.
     )
