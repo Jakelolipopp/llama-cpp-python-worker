@@ -119,15 +119,13 @@ def clean_stream(stream):
     if analysis_open:
         yield "</t>"
 
-def handler(event):
+async def handler(event):
     global found_nas, found_gguf, llm
     print(f"Worker Start")
     if not found_nas:
-        yield "No NAS found on startup"
-        return
+        return "No NAS found on startup"
     if not found_gguf:
-        yield "No gguf model found on startup"
-        return # I think both yields could be just returns but lets be safe
+        return "No gguf model found on startup"
     input = event['input']
 
     prompt = input.get('prompt')  
